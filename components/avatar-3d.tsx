@@ -9,9 +9,8 @@ export function Avatar3D({ gender, angle, garments }: { gender: 'female' | 'male
   const hostRef = useRef<HTMLDivElement>(null);
   const avatarRef = useRef<THREE.Group | null>(null);
   const angleRef = useRef(angle);
-  angleRef.current = angle;
 
-  useEffect(() => { if (avatarRef.current) avatarRef.current.rotation.y = THREE.MathUtils.degToRad(angle); }, [angle]);
+  useEffect(() => { angleRef.current = angle; if (avatarRef.current) avatarRef.current.rotation.y = THREE.MathUtils.degToRad(angle); }, [angle]);
 
   useEffect(() => {
     const host = hostRef.current; if (!host) return;
