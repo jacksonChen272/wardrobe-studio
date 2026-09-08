@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ImagePlus, Layers3, RotateCcw, RotateCw, Shirt, Trash2, Upload, X } from 'lucide-react';
+import { ArrowDownToLine, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ImagePlus, Layers3, RotateCcw, RotateCw, Shirt, Trash2, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar3D } from '@/components/avatar-3d';
 
 type Category = '上衣' | '下身' | '鞋子' | '配飾';
@@ -22,6 +22,13 @@ async function readItems() { const db = await openDb(); return new Promise<Wardr
 async function storeItem(item: WardrobeItem) { const db = await openDb(); db.transaction('items', 'readwrite').objectStore('items').put(item); }
 async function deleteItem(id: string) { const db = await openDb(); db.transaction('items', 'readwrite').objectStore('items').delete(id); }
 function fileUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('無法讀取圖片')); reader.onerror = reject; reader.readAsDataURL(file); }); }
+async function prepareGarment(file: File) {
+  const source = await fileUrl(file); const image = new Image(); image.src = source; await image.decode();
+  const limit = 1400; const ratio = Math.min(1, limit / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.round(image.width*ratio); canvas.height = Math.round(image.height*ratio); const context = canvas.getContext('2d', { willReadFrequently:true }); if (!context) return source;
+  context.drawImage(image,0,0,canvas.width,canvas.height); const pixels=context.getImageData(0,0,canvas.width,canvas.height); const corner=(x:number,y:number)=>{const i=(y*canvas.width+x)*4;return (pixels.data[i]+pixels.data[i+1]+pixels.data[i+2])/3}; const lightBackground=[corner(0,0),corner(canvas.width-1,0),corner(0,canvas.height-1),corner(canvas.width-1,canvas.height-1)].filter((value)=>value>225).length>=3;
+  if (lightBackground) { for(let i=0;i<pixels.data.length;i+=4){const r=pixels.data[i],g=pixels.data[i+1],b=pixels.data[i+2],min=Math.min(r,g,b),max=Math.max(r,g,b);if(min>218&&max-min<32)pixels.data[i+3]=Math.max(0,255-(min-218)*7);} context.putImageData(pixels,0,0); }
+  return canvas.toDataURL('image/png');
+}
 
 export default function Home() {
   const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([sample]);
@@ -31,9 +38,12 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [modelAngle, setModelAngle] = useState(0);
   const [gender, setGender] = useState<'female' | 'male'>('female');
+  const [zoom, setZoom] = useState(1);
   const [notice, setNotice] = useState('');
   const canvasRef = useRef<HTMLDivElement>(null);
   const spinGesture = useRef<{ startX: number; startAngle: number } | null>(null);
+  const pointers = useRef(new Map<number, { x:number; y:number }>());
+  const pinch = useRef<{ distance:number; zoom:number } | null>(null);
 
   useEffect(() => { readItems().then((items) => setWardrobe([sample, ...items])).catch(() => undefined); }, []);
   useEffect(() => {
@@ -58,14 +68,14 @@ export default function Home() {
   const handleFiles = async (files: FileList | null) => {
     if (!files?.length) return;
     const accepted = [...files].filter((file) => file.type.startsWith('image/')).slice(0, 12);
-    const items = await Promise.all(accepted.map(async (file) => ({ id: crypto.randomUUID(), name: file.name.replace(/\.[^.]+$/, ''), category: uploadCategory, src: await fileUrl(file) })));
+    const items = await Promise.all(accepted.map(async (file) => ({ id: crypto.randomUUID(), name: file.name.replace(/\.[^.]+$/, ''), category: uploadCategory, src: await prepareGarment(file) })));
     for (const item of items) await storeItem(item);
     setWardrobe((current) => [...current, ...items]); flash(`已加入 ${items.length} 件單品`);
   };
   const removeFromWardrobe = async (item: WardrobeItem) => { if (item.id === sample.id) return; await deleteItem(item.id); setWardrobe((current) => current.filter((entry) => entry.id !== item.id)); setCanvasItems((current) => current.filter((entry) => entry.id !== item.id)); };
-  const moveDrag = (event: React.PointerEvent) => { const spin = spinGesture.current; if (spin) setModelAngle(Math.max(-70, Math.min(70, spin.startAngle + (event.clientX - spin.startX) * .45))); };
-  const startSpin = (event: React.PointerEvent) => { if ((event.target as HTMLElement).closest('.canvas-item, .spin-button')) return; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); spinGesture.current = { startX: event.clientX, startAngle: modelAngle }; };
-  const endPointer = () => { spinGesture.current = null; };
+  const moveDrag = (event: React.PointerEvent) => { pointers.current.set(event.pointerId,{x:event.clientX,y:event.clientY}); const active=[...pointers.current.values()]; if(active.length>=2&&pinch.current){const distance=Math.hypot(active[0].x-active[1].x,active[0].y-active[1].y);setZoom(Math.max(.65,Math.min(1.9,pinch.current.zoom*distance/pinch.current.distance)));return;} const spin=spinGesture.current;if(spin)setModelAngle(Math.max(-85,Math.min(85,spin.startAngle+(event.clientX-spin.startX)*.45))); };
+  const startSpin = (event: React.PointerEvent) => { if ((event.target as HTMLElement).closest('.spin-button, .zoom-controls')) return; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); pointers.current.set(event.pointerId,{x:event.clientX,y:event.clientY}); if(pointers.current.size===2){const active=[...pointers.current.values()];pinch.current={distance:Math.hypot(active[0].x-active[1].x,active[0].y-active[1].y),zoom};spinGesture.current=null;}else spinGesture.current={startX:event.clientX,startAngle:modelAngle}; };
+  const endPointer = (event: React.PointerEvent) => { pointers.current.delete(event.pointerId); spinGesture.current=null; if(pointers.current.size<2)pinch.current=null; };
   const exportOutfit = async () => {
     if (!canvasRef.current || !canvasItems.length) { flash('先加入幾件單品再匯出'); return; }
     const rect = canvasRef.current.getBoundingClientRect(); const canvas = document.createElement('canvas'); canvas.width = Math.round(rect.width * 2); canvas.height = Math.round(rect.height * 2); const ctx = canvas.getContext('2d'); if (!ctx) return;
@@ -87,11 +97,12 @@ export default function Home() {
       </aside>
       <section className="studio-panel">
         <div className="studio-title"><div><p className="eyebrow">3D VIRTUAL FITTING</p><h2>3D 模特兒試穿</h2></div><div className="model-options"><div className="gender-switch" aria-label="選擇模特兒"><button className={gender === 'female' ? 'active' : ''} onClick={() => setGender('female')}>女生</button><button className={gender === 'male' ? 'active' : ''} onClick={() => setGender('male')}>男生</button></div><p>點選衣物自動貼合；左右滑動旋轉 3D 模特兒。</p></div></div>
-        <div ref={canvasRef} className="outfit-canvas" onPointerDown={startSpin} onPointerMove={moveDrag} onPointerUp={endPointer} onPointerCancel={endPointer} onPointerLeave={endPointer}>
+        <div ref={canvasRef} className="outfit-canvas" onPointerDown={startSpin} onPointerMove={moveDrag} onPointerUp={endPointer} onPointerCancel={endPointer} onPointerLeave={endPointer} onWheel={(event)=>setZoom((value)=>Math.max(.65,Math.min(1.9,value-event.deltaY*.001)))}>
           <div className="canvas-grid"/>
-          <Avatar3D gender={gender} angle={modelAngle} garments={canvasItems}/>
+          <Avatar3D gender={gender} angle={modelAngle} zoom={zoom} garments={canvasItems}/>
           {!canvasItems.length && <div className="fit-hint"><h3>為模特兒換上第一件衣服</h3><button onClick={() => addToCanvas(sample)}>試穿藍色外套</button></div>}
           <button className="spin-button spin-left" aria-label="向左旋轉模特兒" onClick={() => setModelAngle((angle) => Math.max(-70, angle - 15))}><ChevronLeft/></button><button className="spin-button spin-right" aria-label="向右旋轉模特兒" onClick={() => setModelAngle((angle) => Math.min(70, angle + 15))}><ChevronRight/></button>
+          <div className="zoom-controls"><button aria-label="縮小模特兒" onClick={()=>setZoom((value)=>Math.max(.65,value-.12))}><ZoomOut size={18}/></button><span>{Math.round(zoom*100)}%</span><button aria-label="放大模特兒" onClick={()=>setZoom((value)=>Math.min(1.9,value+.12))}><ZoomIn size={18}/></button></div>
           <div className="spin-status">左右滑動旋轉 · {Math.round(modelAngle)}°</div>
           <div className="canvas-label"><Layers3 size={15}/>{canvasItems.length} 件單品</div>
         </div>
