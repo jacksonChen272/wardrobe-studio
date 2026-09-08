@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ImagePlus, Layers3, RotateCcw, RotateCw, Shirt, Trash2, Upload, X } from 'lucide-react';
+import { Avatar3D } from '@/components/avatar-3d';
 
 type Category = '上衣' | '下身' | '鞋子' | '配飾';
 type WardrobeItem = { id: string; name: string; category: Category; src: string };
@@ -29,9 +30,9 @@ export default function Home() {
   const [uploadCategory, setUploadCategory] = useState<Category>('上衣');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [modelAngle, setModelAngle] = useState(0);
+  const [gender, setGender] = useState<'female' | 'male'>('female');
   const [notice, setNotice] = useState('');
   const canvasRef = useRef<HTMLDivElement>(null);
-  const gesture = useRef<{ id: string; startX: number; startY: number; itemX: number; itemY: number } | null>(null);
   const spinGesture = useRef<{ startX: number; startAngle: number } | null>(null);
 
   useEffect(() => { readItems().then((items) => setWardrobe([sample, ...items])).catch(() => undefined); }, []);
@@ -62,10 +63,9 @@ export default function Home() {
     setWardrobe((current) => [...current, ...items]); flash(`已加入 ${items.length} 件單品`);
   };
   const removeFromWardrobe = async (item: WardrobeItem) => { if (item.id === sample.id) return; await deleteItem(item.id); setWardrobe((current) => current.filter((entry) => entry.id !== item.id)); setCanvasItems((current) => current.filter((entry) => entry.id !== item.id)); };
-  const startDrag = (event: React.PointerEvent, item: CanvasItem) => { event.preventDefault(); (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); gesture.current = { id: item.instanceId, startX: event.clientX, startY: event.clientY, itemX: item.x, itemY: item.y }; setSelectedId(item.instanceId); };
-  const moveDrag = (event: React.PointerEvent) => { const drag = gesture.current; if (drag) { setCanvasItems((items) => items.map((item) => item.instanceId === drag.id ? { ...item, x: drag.itemX + event.clientX - drag.startX, y: drag.itemY + event.clientY - drag.startY } : item)); return; } const spin = spinGesture.current; if (spin) setModelAngle(Math.max(-70, Math.min(70, spin.startAngle + (event.clientX - spin.startX) * .45))); };
+  const moveDrag = (event: React.PointerEvent) => { const spin = spinGesture.current; if (spin) setModelAngle(Math.max(-70, Math.min(70, spin.startAngle + (event.clientX - spin.startX) * .45))); };
   const startSpin = (event: React.PointerEvent) => { if ((event.target as HTMLElement).closest('.canvas-item, .spin-button')) return; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); spinGesture.current = { startX: event.clientX, startAngle: modelAngle }; };
-  const endPointer = () => { gesture.current = null; spinGesture.current = null; };
+  const endPointer = () => { spinGesture.current = null; };
   const exportOutfit = async () => {
     if (!canvasRef.current || !canvasItems.length) { flash('先加入幾件單品再匯出'); return; }
     const rect = canvasRef.current.getBoundingClientRect(); const canvas = document.createElement('canvas'); canvas.width = Math.round(rect.width * 2); canvas.height = Math.round(rect.height * 2); const ctx = canvas.getContext('2d'); if (!ctx) return;
@@ -86,13 +86,10 @@ export default function Home() {
         <div className="wardrobe-grid">{filtered.map((item) => <article className="wardrobe-card" key={item.id}><button className="item-preview" onClick={() => addToCanvas(item)} aria-label={`加入${item.name}到搭配`}>{/* oxlint-disable-next-line next/no-img-element */}<img src={item.src} alt={item.name}/></button><div><span>{item.name}</span><small>{item.category}</small></div>{item.id !== sample.id && <button className="delete-item" aria-label={`刪除${item.name}`} onClick={() => removeFromWardrobe(item)}><X size={14}/></button>}</article>)}</div>
       </aside>
       <section className="studio-panel">
-        <div className="studio-title"><div><p className="eyebrow">VIRTUAL FITTING</p><h2>模特兒試穿</h2></div><p>點選衣物會自動對準模特兒；在畫布空白處左右滑動，就能旋轉查看。</p></div>
+        <div className="studio-title"><div><p className="eyebrow">3D VIRTUAL FITTING</p><h2>3D 模特兒試穿</h2></div><div className="model-options"><div className="gender-switch" aria-label="選擇模特兒"><button className={gender === 'female' ? 'active' : ''} onClick={() => setGender('female')}>女生</button><button className={gender === 'male' ? 'active' : ''} onClick={() => setGender('male')}>男生</button></div><p>點選衣物自動貼合；左右滑動旋轉 3D 模特兒。</p></div></div>
         <div ref={canvasRef} className="outfit-canvas" onPointerDown={startSpin} onPointerMove={moveDrag} onPointerUp={endPointer} onPointerCancel={endPointer} onPointerLeave={endPointer}>
           <div className="canvas-grid"/>
-          <div className="fitting-stage" style={{ transform:`rotateY(${modelAngle}deg)` }}>
-            {/* oxlint-disable-next-line next/no-img-element */}<img className="mannequin" src="./mannequin.png" alt="中央試穿模特兒" draggable={false}/>
-            {[...canvasItems].sort((a,b) => a.z-b.z).map((item) => <button key={item.instanceId} className={`canvas-item ${selectedId === item.instanceId ? 'selected' : ''}`} style={{ left:item.x, top:item.y, zIndex:item.z, transform:`translate(-50%, -50%) rotate(${item.rotation}deg) scale(${item.scale})` }} onPointerDown={(event) => startDrag(event,item)} aria-label={`移動${item.name}`}>{/* oxlint-disable-next-line next/no-img-element */}<img src={item.src} alt="" draggable={false}/></button>)}
-          </div>
+          <Avatar3D gender={gender} angle={modelAngle} garments={canvasItems}/>
           {!canvasItems.length && <div className="fit-hint"><h3>為模特兒換上第一件衣服</h3><button onClick={() => addToCanvas(sample)}>試穿藍色外套</button></div>}
           <button className="spin-button spin-left" aria-label="向左旋轉模特兒" onClick={() => setModelAngle((angle) => Math.max(-70, angle - 15))}><ChevronLeft/></button><button className="spin-button spin-right" aria-label="向右旋轉模特兒" onClick={() => setModelAngle((angle) => Math.min(70, angle + 15))}><ChevronRight/></button>
           <div className="spin-status">左右滑動旋轉 · {Math.round(modelAngle)}°</div>
