@@ -4,6 +4,8 @@
 
 衣物照片透過 IndexedDB 保存在使用者自己的瀏覽器，不會傳送到外部伺服器。
 
+3D avatar assets `Michelle.glb` and `Soldier.glb` are from the [three.js examples](https://github.com/mrdoob/three.js/tree/dev/examples/models/gltf) and are used under the MIT License.
+
 ## 本機開發
 
 ```bash
