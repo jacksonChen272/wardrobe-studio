@@ -1,118 +1,634 @@
 'use client';
-
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ImagePlus, Layers3, RotateCcw, RotateCw, Shirt, Trash2, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { Avatar3D } from '@/components/avatar-3d';
-
-type Category = '上衣' | '下身' | '鞋子' | '配飾';
-type WardrobeItem = { id: string; name: string; category: Category; src: string };
-type CanvasItem = WardrobeItem & { instanceId: string; x: number; y: number; rotation: number; scale: number; z: number };
-const categories: Array<Category | '全部'> = ['全部', '上衣', '下身', '鞋子', '配飾'];
-const sample: WardrobeItem = { id: 'sample-jacket', name: '藍色短版外套', category: '上衣', src: './sample-jacket.png' };
-
-function openDb() {
-  return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open('wardrobe-studio', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('items', { keyPath: 'id' });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-async function readItems() { const db = await openDb(); return new Promise<WardrobeItem[]>((resolve, reject) => { const r = db.transaction('items').objectStore('items').getAll(); r.onsuccess = () => resolve(r.result as WardrobeItem[]); r.onerror = () => reject(r.error); }); }
-async function storeItem(item: WardrobeItem) { const db = await openDb(); db.transaction('items', 'readwrite').objectStore('items').put(item); }
-async function deleteItem(id: string) { const db = await openDb(); db.transaction('items', 'readwrite').objectStore('items').delete(id); }
-function fileUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('無法讀取圖片')); reader.onerror = reject; reader.readAsDataURL(file); }); }
-async function prepareGarment(file: File) {
-  const source = await fileUrl(file); const image = new Image(); image.src = source; await image.decode();
-  const limit = 1400; const ratio = Math.min(1, limit / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.round(image.width*ratio); canvas.height = Math.round(image.height*ratio); const context = canvas.getContext('2d', { willReadFrequently:true }); if (!context) return source;
-  context.drawImage(image,0,0,canvas.width,canvas.height); const pixels=context.getImageData(0,0,canvas.width,canvas.height); const corner=(x:number,y:number)=>{const i=(y*canvas.width+x)*4;return (pixels.data[i]+pixels.data[i+1]+pixels.data[i+2])/3}; const lightBackground=[corner(0,0),corner(canvas.width-1,0),corner(0,canvas.height-1),corner(canvas.width-1,canvas.height-1)].filter((value)=>value>225).length>=3;
-  if (lightBackground) { for(let i=0;i<pixels.data.length;i+=4){const r=pixels.data[i],g=pixels.data[i+1],b=pixels.data[i+2],min=Math.min(r,g,b),max=Math.max(r,g,b);if(min>218&&max-min<32)pixels.data[i+3]=Math.max(0,255-(min-218)*7);} context.putImageData(pixels,0,0); }
-  return canvas.toDataURL('image/png');
-}
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  useCallback,
+  lazy,
+  Suspense,
+} from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Plus,
+  Shuffle,
+  X,
+  Minus,
+  RotateCcw,
+} from 'lucide-react';
+import type { ViewHandle } from '@/components/avatar-3d';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import {
+  samples,
+  initialOutfit,
+  CATEGORIES,
+  labels,
+  templates,
+  cycle,
+  acceptedSwipe,
+  loadGarments,
+  saveGarment,
+  type Category,
+  type Garment,
+  type Mode,
+  type Template,
+} from '@/lib/wardrobe';
+import {
+  prepareImport,
+  finishImport,
+  fabricSwatch,
+  type ImportDraft,
+} from '@/lib/import-pipeline';
+const View = lazy(() =>
+  import('@/components/avatar-3d').then((m) => ({ default: m.Avatar3D })),
+);
 
 export default function Home() {
-  const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([sample]);
-  const [canvasItems, setCanvasItems] = useState<CanvasItem[]>([]);
-  const [activeCategory, setActiveCategory] = useState<Category | '全部'>('全部');
-  const [uploadCategory, setUploadCategory] = useState<Category>('上衣');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [modelAngle, setModelAngle] = useState(0);
-  const [gender, setGender] = useState<'female' | 'male'>('female');
-  const [zoom, setZoom] = useState(1);
-  const [notice, setNotice] = useState('');
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const spinGesture = useRef<{ startX: number; startAngle: number } | null>(null);
-  const pointers = useRef(new Map<number, { x:number; y:number }>());
-  const pinch = useRef<{ distance:number; zoom:number } | null>(null);
-
-  useEffect(() => { readItems().then((items) => setWardrobe([sample, ...items])).catch(() => undefined); }, []);
+  const [items, setItems] = useState<Garment[]>(samples),
+    [outfit, setOutfit] = useState(initialOutfit),
+    [mode, setMode] = useState<Mode>('builder'),
+    [angle, setAngle] = useState(0),
+    [zoom, setZoom] = useState(1),
+    [ready, setReady] = useState(false),
+    [drawer, setDrawer] = useState<Category | null>(null),
+    [notice, setNotice] = useState(''),
+    [busy, setBusy] = useState(false),
+    [draft, setDraft] = useState<ImportDraft | null>(null),
+    [name, setName] = useState(''),
+    [template, setTemplate] = useState<Template>('tshirt'),
+    [color, setColor] = useState('#555555'),
+    [swatch, setSwatch] = useState<string | null>(null),
+    [sampling, setSampling] = useState(false);
+  const view = useRef<ViewHandle>(null),
+    fileInput = useRef<HTMLInputElement>(null),
+    surface = useRef<HTMLDivElement>(null),
+    gesture = useRef<{
+      id: number;
+      x: number;
+      y: number;
+      category: Category | null;
+      angle: number;
+      mode: Mode;
+    } | null>(null),
+    touches = useRef(new Map<number, { x: number; y: number }>()),
+    pinch = useRef<{ distance: number; zoom: number } | null>(null);
+  const selected = useMemo(
+    () =>
+      CATEGORIES.map(
+        (c) =>
+          items.find((i) => i.id === outfit[c]) ??
+          samples.find((i) => i.category === c)!,
+      ),
+    [items, outfit],
+  );
   useEffect(() => {
-    const context = (document as Document & { modelContext?: { registerTool: (tool: unknown, options?: unknown) => void } }).modelContext;
-    if (!context?.registerTool) return;
-    const controller = new AbortController();
-    try { context.registerTool({ name: 'clear_outfit', title: '清空目前搭配', description: '移除搭配畫布上的所有單品，保留衣櫥內的照片。', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: () => { setCanvasItems([]); setSelectedId(null); return { cleared: true }; } }, { signal: controller.signal }); } catch {}
-    return () => controller.abort();
+    loadGarments()
+      .then((g) => setItems([...samples, ...g]))
+      .catch(() => setNotice('無法讀取本機衣櫥；仍可試用內建穿搭。'));
   }, []);
-
-  const filtered = activeCategory === '全部' ? wardrobe : wardrobe.filter((item) => item.category === activeCategory);
-  const selected = canvasItems.find((item) => item.instanceId === selectedId);
-  const flash = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 2200); };
-  const addToCanvas = useCallback((item: WardrobeItem) => {
-    const rect = canvasRef.current?.getBoundingClientRect(); const count = canvasItems.length;
-    const height = rect?.height ?? 600;
-    const fit = item.category === '上衣' ? { y: height * .38, scale: .78 } : item.category === '下身' ? { y: height * .62, scale: .9 } : item.category === '鞋子' ? { y: height * .86, scale: .62 } : { y: height * .25, scale: .55 };
-    const next: CanvasItem = { ...item, instanceId: `${item.id}-${Date.now()}`, x: Math.max(90, (rect?.width ?? 600) / 2 + (count % 2 ? 8 : 0)), y: fit.y, rotation: 0, scale: fit.scale, z: count + 1 };
-    setCanvasItems((current) => [...current, next]); setSelectedId(next.instanceId);
-  }, [canvasItems.length]);
-  const updateSelected = (patch: Partial<CanvasItem>) => { if (selectedId) setCanvasItems((items) => items.map((item) => item.instanceId === selectedId ? { ...item, ...patch } : item)); };
-  const handleFiles = async (files: FileList | null) => {
-    if (!files?.length) return;
-    const accepted = [...files].filter((file) => file.type.startsWith('image/')).slice(0, 12);
-    const items = await Promise.all(accepted.map(async (file) => ({ id: crypto.randomUUID(), name: file.name.replace(/\.[^.]+$/, ''), category: uploadCategory, src: await prepareGarment(file) })));
-    for (const item of items) await storeItem(item);
-    setWardrobe((current) => [...current, ...items]); flash(`已加入 ${items.length} 件單品`);
+  const onReady = useCallback(() => setReady(true), []);
+  const change = useCallback(
+    (c: Category, d: number) => {
+      setOutfit((o) => cycle(o, items, c, d));
+    },
+    [items],
+  );
+  const resetGesture = () => {
+    gesture.current = null;
+    touches.current.clear();
+    pinch.current = null;
   };
-  const removeFromWardrobe = async (item: WardrobeItem) => { if (item.id === sample.id) return; await deleteItem(item.id); setWardrobe((current) => current.filter((entry) => entry.id !== item.id)); setCanvasItems((current) => current.filter((entry) => entry.id !== item.id)); };
-  const moveDrag = (event: React.PointerEvent) => { pointers.current.set(event.pointerId,{x:event.clientX,y:event.clientY}); const active=[...pointers.current.values()]; if(active.length>=2&&pinch.current){const distance=Math.hypot(active[0].x-active[1].x,active[0].y-active[1].y);setZoom(Math.max(.65,Math.min(1.9,pinch.current.zoom*distance/pinch.current.distance)));return;} const spin=spinGesture.current;if(spin)setModelAngle(Math.max(-85,Math.min(85,spin.startAngle+(event.clientX-spin.startX)*.45))); };
-  const startSpin = (event: React.PointerEvent) => { if ((event.target as HTMLElement).closest('.spin-button, .zoom-controls')) return; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); pointers.current.set(event.pointerId,{x:event.clientX,y:event.clientY}); if(pointers.current.size===2){const active=[...pointers.current.values()];pinch.current={distance:Math.hypot(active[0].x-active[1].x,active[0].y-active[1].y),zoom};spinGesture.current=null;}else spinGesture.current={startX:event.clientX,startAngle:modelAngle}; };
-  const endPointer = (event: React.PointerEvent) => { pointers.current.delete(event.pointerId); spinGesture.current=null; if(pointers.current.size<2)pinch.current=null; };
-  const exportOutfit = async () => {
-    if (!canvasRef.current || !canvasItems.length) { flash('先加入幾件單品再匯出'); return; }
-    const rect = canvasRef.current.getBoundingClientRect(); const canvas = document.createElement('canvas'); canvas.width = Math.round(rect.width * 2); canvas.height = Math.round(rect.height * 2); const ctx = canvas.getContext('2d'); if (!ctx) return;
-    ctx.scale(2, 2); ctx.fillStyle = '#ebe9e2'; ctx.fillRect(0, 0, rect.width, rect.height);
-    const mannequin = new Image(); mannequin.src = './mannequin.png'; await mannequin.decode(); const mannequinHeight = rect.height * .9; const mannequinWidth = mannequin.width * (mannequinHeight / mannequin.height); ctx.globalAlpha = .92; ctx.drawImage(mannequin, rect.width / 2 - mannequinWidth / 2, rect.height * .05, mannequinWidth, mannequinHeight); ctx.globalAlpha = 1;
-    for (const item of [...canvasItems].sort((a, b) => a.z - b.z)) { const img = new Image(); img.src = item.src; await img.decode(); const size = 210 * item.scale; ctx.save(); ctx.translate(item.x, item.y); ctx.rotate(item.rotation * Math.PI / 180); const ratio = Math.min(size / img.width, size / img.height); ctx.drawImage(img, -img.width * ratio / 2, -img.height * ratio / 2, img.width * ratio, img.height * ratio); ctx.restore(); }
-    const link = document.createElement('a'); link.download = `我的搭配-${new Date().toISOString().slice(0, 10)}.png`; link.href = canvas.toDataURL('image/png'); link.click(); flash('搭配圖片已下載');
+  const switchMode = (m: Mode) => {
+    resetGesture();
+    setAngle(0);
+    setZoom(1);
+    setMode(m);
   };
-
-  return <main className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark"><Shirt size={20}/></span><span>衣櫥實驗室</span></div><div className="top-actions"><button className="ghost-button" onClick={() => { setCanvasItems([]); setSelectedId(null); }}><RotateCcw size={17}/>清空</button><button className="primary-button" onClick={exportOutfit}><ArrowDownToLine size={17}/>儲存搭配</button></div></header>
-    <section className="workspace">
-      <aside className="wardrobe-panel">
-        <div className="panel-heading"><div><p className="eyebrow">MY WARDROBE</p><h1>我的衣櫥</h1></div><label className="icon-button upload-icon" aria-label="上傳衣物照片"><Upload size={19}/><input type="file" accept="image/*" multiple onChange={(e) => handleFiles(e.target.files)}/></label></div>
-        <div className="category-row" aria-label="衣物分類">{categories.map((category) => <button key={category} className={activeCategory === category ? 'active' : ''} onClick={() => setActiveCategory(category)}>{category}</button>)}</div>
-        <div className="category-picker"><span>上傳分類</span><select value={uploadCategory} onChange={(e) => setUploadCategory(e.target.value as Category)}>{categories.slice(1).map((category) => <option key={category}>{category}</option>)}</select></div>
-        <label className="upload-zone"><input type="file" accept="image/*" multiple onChange={(e) => handleFiles(e.target.files)}/><ImagePlus size={22}/><span>加入衣服照片</span><small>JPG、PNG、WEBP</small></label>
-        <div className="wardrobe-grid">{filtered.map((item) => <article className="wardrobe-card" key={item.id}><button className="item-preview" onClick={() => addToCanvas(item)} aria-label={`加入${item.name}到搭配`}>{/* oxlint-disable-next-line next/no-img-element */}<img src={item.src} alt={item.name}/></button><div><span>{item.name}</span><small>{item.category}</small></div>{item.id !== sample.id && <button className="delete-item" aria-label={`刪除${item.name}`} onClick={() => removeFromWardrobe(item)}><X size={14}/></button>}</article>)}</div>
-      </aside>
-      <section className="studio-panel">
-        <div className="studio-title"><div><p className="eyebrow">3D VIRTUAL FITTING</p><h2>服飾店人台試穿</h2></div><div className="model-options"><div className="gender-switch" aria-label="選擇模特兒"><button className={gender === 'female' ? 'active' : ''} onClick={() => setGender('female')}>女裝人台</button><button className={gender === 'male' ? 'active' : ''} onClick={() => setGender('male')}>男裝人台</button></div><p>衣物會形成袖子、腰身與褲管；左右滑動可旋轉查看。</p></div></div>
-        <div ref={canvasRef} className="outfit-canvas" onPointerDown={startSpin} onPointerMove={moveDrag} onPointerUp={endPointer} onPointerCancel={endPointer} onPointerLeave={endPointer} onWheel={(event)=>setZoom((value)=>Math.max(.65,Math.min(1.9,value-event.deltaY*.001)))}>
-          <div className="canvas-grid"/>
-          <Avatar3D gender={gender} angle={modelAngle} zoom={zoom} garments={canvasItems}/>
-          {!canvasItems.length && <div className="fit-hint"><h3>為模特兒換上第一件衣服</h3><button onClick={() => addToCanvas(sample)}>試穿藍色外套</button></div>}
-          <button className="spin-button spin-left" aria-label="向左旋轉模特兒" onClick={() => setModelAngle((angle) => Math.max(-70, angle - 15))}><ChevronLeft/></button><button className="spin-button spin-right" aria-label="向右旋轉模特兒" onClick={() => setModelAngle((angle) => Math.min(70, angle + 15))}><ChevronRight/></button>
-          <div className="zoom-controls"><button aria-label="縮小模特兒" onClick={()=>setZoom((value)=>Math.max(.65,value-.12))}><ZoomOut size={18}/></button><span>{Math.round(zoom*100)}%</span><button aria-label="放大模特兒" onClick={()=>setZoom((value)=>Math.min(1.9,value+.12))}><ZoomIn size={18}/></button></div>
-          <div className="spin-status">左右滑動旋轉 · {Math.round(modelAngle)}°</div>
-          <div className="canvas-label"><Layers3 size={15}/>{canvasItems.length} 件單品</div>
+  const down = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ready || (e.target as HTMLElement).closest('button')) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.current.size > 1) {
+      gesture.current = null;
+      if (mode === 'inspect') {
+        const [a, b] = [...touches.current.values()];
+        pinch.current = {
+          distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+          zoom,
+        };
+      }
+      return;
+    }
+    gesture.current = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      category: view.current?.zone((e.clientY - r.top) / r.height) ?? null,
+      angle,
+      mode,
+    };
+  };
+  const move = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!touches.current.has(e.pointerId)) return;
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (mode === 'inspect' && pinch.current && touches.current.size === 2) {
+      const [a, b] = [...touches.current.values()];
+      setZoom(
+        Math.max(
+          0.8,
+          Math.min(
+            1.8,
+            (pinch.current.zoom * Math.hypot(a.x - b.x, a.y - b.y)) /
+              pinch.current.distance,
+          ),
+        ),
+      );
+      return;
+    }
+    const g = gesture.current;
+    if (g?.mode === 'inspect' && mode === 'inspect')
+      setAngle(g.angle + (e.clientX - g.x) * 0.009);
+  };
+  const up = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = gesture.current;
+    if (
+      g &&
+      g.id === e.pointerId &&
+      g.mode === 'builder' &&
+      mode === 'builder' &&
+      g.category &&
+      acceptedSwipe(
+        e.clientX - g.x,
+        e.clientY - g.y,
+        e.currentTarget.clientWidth,
+      )
+    )
+      change(g.category, e.clientX < g.x ? 1 : -1);
+    resetGesture();
+  };
+  const importFile = async (file?: File) => {
+    if (!file) return;
+    setBusy(true);
+    setNotice('');
+    try {
+      const d = await prepareImport(file);
+      setDraft(d);
+      setColor(d.color);
+      setName(file.name.replace(/\.[^.]+$/, ''));
+      setTemplate(
+        drawer === 'bottom'
+          ? 'pants'
+          : drawer === 'shoes'
+            ? 'sneakers'
+            : 'tshirt',
+      );
+      setSwatch(null);
+      setSampling(false);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : '圖片無法讀取');
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  };
+  const confirmImport = async () => {
+    if (!draft) return;
+    setBusy(true);
+    try {
+      const item = finishImport(draft, name, template, color, swatch);
+      await saveGarment(item);
+      setItems((a) => [...a, item]);
+      setOutfit((o) => ({ ...o, [item.category]: item.id }));
+      setDraft(null);
+      setDrawer(null);
+      setNotice('已加入衣櫥並換上。照片僅儲存在這台裝置。');
+    } catch {
+      setNotice('儲存失敗，可能是裝置空間不足。請重試。');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main className="studio" data-mode={mode}>
+      <header>
+        <a className="wordmark" href="./">
+          WARDROBE<span>穿搭實驗室</span>
+        </a>
+        <button
+          className="wardrobe-open"
+          disabled={mode === 'inspect'}
+          onClick={() => setDrawer('top')}
+        >
+          我的衣櫥 <Plus size={16} />
+        </button>
+      </header>
+      <section className="experience">
+        <div className="intro">
+          <p className="eyebrow">
+            {mode === 'builder' ? '01 / BUILD YOUR LOOK' : '02 / EVERY ANGLE'}
+          </p>
+          <h1>
+            {mode === 'builder' ? '今天，想穿什麼？' : '讓穿搭，轉個身。'}
+          </h1>
+          <p>
+            {mode === 'builder'
+              ? '在上衣、下身、鞋子的位置左右滑，找到喜歡的組合。'
+              : '左右拖曳檢視側面，衣服會保持這一套。'}
+          </p>
         </div>
-        <div className={`control-dock ${selected ? '' : 'disabled'}`}>
-          <div className="selection-name"><span className="selection-swatch"/><div><small>已選取</small><strong>{selected?.name ?? '尚未選取單品'}</strong></div></div>
-          <div className="control-group"><button aria-label="向左旋轉" onClick={() => updateSelected({ rotation:(selected?.rotation ?? 0)-15 })}><RotateCcw size={19}/></button><label><span>旋轉</span><input aria-label="旋轉角度" type="range" min="-180" max="180" value={selected?.rotation ?? 0} onChange={(e) => updateSelected({ rotation:Number(e.target.value) })}/></label><button aria-label="向右旋轉" onClick={() => updateSelected({ rotation:(selected?.rotation ?? 0)+15 })}><RotateCw size={19}/></button></div>
-          <div className="control-group scale-control"><span className="small-a">A</span><input aria-label="縮放尺寸" type="range" min="0.35" max="2" step="0.05" value={selected?.scale ?? 1} onChange={(e) => updateSelected({ scale:Number(e.target.value) })}/><span className="large-a">A</span></div>
-          <div className="stack-actions"><button aria-label="移到上層" onClick={() => updateSelected({ z:Math.max(0,...canvasItems.map((i) => i.z))+1 })}><ChevronUp size={18}/></button><button aria-label="移到下層" onClick={() => updateSelected({ z:Math.min(...canvasItems.map((i) => i.z))-1 })}><ChevronDown size={18}/></button><button className="danger" aria-label="從搭配移除" onClick={() => { setCanvasItems((items) => items.filter((i) => i.instanceId !== selectedId)); setSelectedId(null); }}><Trash2 size={18}/></button></div>
+        <div
+          className="stage"
+          ref={surface}
+          onPointerDown={down}
+          onPointerMove={move}
+          onPointerUp={up}
+          onPointerCancel={resetGesture}
+          onLostPointerCapture={resetGesture}
+          onWheel={(e) => {
+            if (mode === 'inspect')
+              setZoom((z) =>
+                Math.max(0.8, Math.min(1.8, z - e.deltaY * 0.001)),
+              );
+          }}
+          aria-label={mode === 'builder' ? '分區滑動換衣服' : '拖曳旋轉穿搭'}
+          tabIndex={0}
+        >
+          <Suspense
+            fallback={<div className="scene-status">正在準備試衣間…</div>}
+          >
+            <View
+              ref={view}
+              mode={mode}
+              angle={angle}
+              zoom={zoom}
+              garments={selected}
+              onReady={onReady}
+            />
+          </Suspense>
+          <div className="mode-label">
+            <span />
+            {mode === 'builder' ? '快速穿搭 · 正面固定' : '3D 檢視 · 拖曳旋轉'}
+          </div>
+          {mode === 'builder' && (
+            <div className="zone-guides" aria-hidden="true">
+              <span>上衣 ↔</span>
+              <span>下身 ↔</span>
+              <span>鞋子 ↔</span>
+            </div>
+          )}
+          {mode === 'inspect' && (
+            <div className="view-controls">
+              <button
+                aria-label="縮小"
+                onClick={() => setZoom((z) => Math.max(0.8, z - 0.15))}
+              >
+                <Minus size={17} />
+              </button>
+              <span>{Math.round(zoom * 100)}%</span>
+              <button
+                aria-label="放大"
+                onClick={() => setZoom((z) => Math.min(1.8, z + 0.15))}
+              >
+                <Plus size={17} />
+              </button>
+              <button
+                aria-label="重設視角"
+                onClick={() => {
+                  setZoom(1);
+                  setAngle(0);
+                }}
+              >
+                <RotateCcw size={17} />
+              </button>
+            </div>
+          )}
+          {mode === 'inspect' && (
+            <div className="angle-presets">
+              {[
+                ['左側', -Math.PI / 2],
+                ['左前', -Math.PI / 4],
+                ['正面', 0],
+                ['右前', Math.PI / 4],
+                ['右側', Math.PI / 2],
+              ].map(([label, a]) => (
+                <button key={label} onClick={() => setAngle(Number(a))}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+        <aside className="look-list">
+          <p className="eyebrow">THE EDIT / 你的搭配</p>
+          {selected.map((g) => (
+            <div
+              className="look-row"
+              key={g.category}
+              data-category={g.category}
+            >
+              <button
+                className="look-info"
+                disabled={mode === 'inspect'}
+                onClick={() => setDrawer(g.category)}
+              >
+                <span
+                  className="color-chip"
+                  style={{ background: g.dominantColors[0] }}
+                />
+                <span>
+                  <small>
+                    {labels[g.category]} · {templates[g.garmentTemplate]}
+                  </small>
+                  <strong>{g.name}</strong>
+                </span>
+              </button>
+              {mode === 'builder' && (
+                <div className="cycle-buttons">
+                  <button
+                    aria-label={`上一件${labels[g.category]}`}
+                    onClick={() => change(g.category, -1)}
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <button
+                    aria-label={`下一件${labels[g.category]}`}
+                    onClick={() => change(g.category, 1)}
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          <p className="approx-note">版型為近似穿搭示意，側面延續布料色彩。</p>
+        </aside>
+        <footer>
+          {mode === 'builder' ? (
+            <>
+              <button
+                className="secondary"
+                onClick={() =>
+                  setOutfit(
+                    (o) =>
+                      Object.fromEntries(
+                        CATEGORIES.map((c) => {
+                          const list = items.filter((i) => i.category === c);
+                          return [
+                            c,
+                            list[Math.floor(Math.random() * list.length)]?.id ??
+                              o[c],
+                          ];
+                        }),
+                      ) as typeof initialOutfit,
+                  )
+                }
+              >
+                <Shuffle size={17} />
+                隨機搭配
+              </button>
+              <button
+                className="primary"
+                disabled={!ready}
+                onClick={() => switchMode('inspect')}
+              >
+                查看穿搭 <ArrowRight size={18} />
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="secondary"
+                onClick={() => switchMode('builder')}
+              >
+                <ArrowLeft size={17} />
+                繼續換裝
+              </button>
+              <button
+                className="primary"
+                onClick={() => view.current?.capture()}
+              >
+                <Download size={17} />
+                儲存穿搭
+              </button>
+            </>
+          )}
+        </footer>
       </section>
-    </section>{notice && <output className="toast" aria-live="polite">{notice}</output>}
-  </main>;
+      {notice && (
+        <output className="notice" onClick={() => setNotice('')}>
+          {notice}
+        </output>
+      )}
+      <input
+        ref={fileInput}
+        type="file"
+        hidden
+        accept="image/jpeg,image/png,image/webp"
+        onChange={(e) => void importFile(e.target.files?.[0])}
+      />
+      {drawer && (
+        <Dialog
+          open={!draft}
+          onOpenChange={(open) => {
+            if (!open && !busy) setDrawer(null);
+          }}
+        >
+          <DialogContent
+            showCloseButton={false}
+            className="closet-sheet"
+            aria-label="我的衣櫥"
+          >
+            <div className="sheet-heading">
+              <DialogTitle>我的衣櫥</DialogTitle>
+              <button aria-label="關閉衣櫥" onClick={() => setDrawer(null)}>
+                <X />
+              </button>
+            </div>
+            <div className="category-tabs">
+              {CATEGORIES.map((c) => (
+                <button
+                  key={c}
+                  aria-pressed={drawer === c}
+                  onClick={() => setDrawer(c)}
+                >
+                  {labels[c]}
+                </button>
+              ))}
+            </div>
+            <button
+              className="upload-button"
+              disabled={busy}
+              onClick={() => fileInput.current?.click()}
+            >
+              <Plus size={18} />
+              {busy ? '正在處理圖片…' : '上傳衣服 / 商品圖片'}
+            </button>
+            <p className="import-help">
+              商品頁請先儲存圖片再上傳。支援白底、平拍及穿著照片；下一步選擇版型與布料。
+            </p>
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={async () => {
+                try {
+                  const r = await fetch('./sample-jacket.png');
+                  if (!r.ok) throw Error();
+                  await importFile(
+                    new File([await r.blob()], '範例藍外套.png', {
+                      type: 'image/png',
+                    }),
+                  );
+                } catch {
+                  setNotice('範例照片無法載入，請改用上傳。');
+                }
+              }}
+            >
+              試用範例商品圖
+            </button>
+            <div className="closet-grid">
+              {items
+                .filter((g) => g.category === drawer)
+                .map((g) => (
+                  <button
+                    className="closet-card"
+                    key={g.id}
+                    aria-pressed={outfit[g.category] === g.id}
+                    onClick={() => {
+                      setOutfit((o) => ({ ...o, [g.category]: g.id }));
+                      setDrawer(null);
+                    }}
+                  >
+                    <span
+                      className="closet-thumb"
+                      style={{ background: g.dominantColors[0] }}
+                    >
+                      {g.sourceImage && (
+                        <img src={g.sourceImage} alt={g.name} />
+                      )}
+                    </span>
+                    <strong>{g.name}</strong>
+                    <small>{templates[g.garmentTemplate]}</small>
+                  </button>
+                ))}
+            </div>
+            <small>
+              原有衣物資料保留在此裝置。配飾資料保留，暫不列入三件式穿搭。
+            </small>
+          </DialogContent>
+        </Dialog>
+      )}
+      {draft && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !busy) setDraft(null);
+          }}
+        >
+          <DialogContent
+            showCloseButton={false}
+            className="import-sheet"
+            aria-label="確認衣物外觀"
+          >
+            <div className="sheet-heading">
+              <DialogTitle>確認衣物外觀</DialogTitle>
+              <button
+                aria-label="取消匯入"
+                disabled={busy}
+                onClick={() => setDraft(null)}
+              >
+                <X />
+              </button>
+            </div>
+            <div className="import-columns">
+              <div>
+                <button
+                  className={`source-preview ${sampling ? 'sampling' : ''}`}
+                  aria-label="點選衣物布料取樣"
+                  onClick={async (e) => {
+                    if (!sampling) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const t = await fabricSwatch(
+                      draft.source,
+                      (e.clientX - rect.left) / rect.width,
+                      (e.clientY - rect.top) / rect.height,
+                    );
+                    setSwatch(t);
+                    setSampling(false);
+                  }}
+                >
+                  <img src={draft.source} alt="原始衣服照片" />
+                </button>
+                <p>
+                  {draft.method === 'manual'
+                    ? '這張照片需要你選擇衣物布料區域。'
+                    : draft.method === 'transparent'
+                      ? '已辨識透明背景。'
+                      : '已分離連接邊緣的單色背景，請確認衣物顏色。'}
+                </p>
+              </div>
+              <div className="import-fields">
+                <label>
+                  單品名稱
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </label>
+                <label>
+                  選擇版型
+                  <select
+                    value={template}
+                    onChange={(e) => setTemplate(e.target.value as Template)}
+                  >
+                    {Object.entries(templates).map(([t, l]) => (
+                      <option key={t} value={t}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  布料主色
+                  <input
+                    type="color"
+                    value={color}
+                    onChange={(e) => {
+                      setColor(e.target.value);
+                      setSwatch(null);
+                    }}
+                  />
+                </label>
+                <button className="secondary" onClick={() => setSampling(true)}>
+                  {sampling ? '請點照片中的衣服' : '從照片選布料區域'}
+                </button>
+                {swatch && (
+                  <div className="swatch">
+                    <img src={swatch} alt="取樣布料" />
+                    <button onClick={() => setSwatch(null)}>改用純色</button>
+                  </div>
+                )}
+                <p>
+                  版型決定立體形狀；取樣區域決定布料紋理。請避開皮膚、衣架與背景。此版本不自動還原
+                  Logo。
+                </p>
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => void confirmImport()}
+                >
+                  {busy ? '儲存中…' : '加入衣櫥並試穿'}
+                  <ArrowRight size={17} />
+                </button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </main>
+  );
 }

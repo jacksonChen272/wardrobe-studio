@@ -1,49 +1,322 @@
 'use client';
-
-import { useEffect, useRef } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  useImperativeHandle,
+  forwardRef,
+} from 'react';
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-
-type Garment = { instanceId:string; category:'上衣'|'下身'|'鞋子'|'配飾'; src:string; scale:number; rotation:number; z:number };
-
-export function Avatar3D({ gender, angle, zoom, garments }:{ gender:'female'|'male'; angle:number; zoom:number; garments:Garment[] }) {
-  const hostRef=useRef<HTMLDivElement>(null); const avatarRef=useRef<THREE.Group|null>(null); const cameraRef=useRef<THREE.PerspectiveCamera|null>(null); const angleRef=useRef(angle); const zoomRef=useRef(zoom);
-  useEffect(()=>{angleRef.current=angle;if(avatarRef.current)avatarRef.current.rotation.y=THREE.MathUtils.degToRad(angle)},[angle]);
-  useEffect(()=>{zoomRef.current=zoom;if(cameraRef.current){cameraRef.current.position.z=8/zoom;cameraRef.current.updateProjectionMatrix()}},[zoom]);
-
-  useEffect(()=>{
-    const host=hostRef.current;if(!host)return;let disposed=false;
-    const scene=new THREE.Scene();const camera=new THREE.PerspectiveCamera(28,1,.1,100);camera.position.set(0,.08,8/zoomRef.current);camera.lookAt(0,0,0);cameraRef.current=camera;
-    const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;host.appendChild(renderer.domElement);
-    scene.add(new THREE.HemisphereLight(0xffffff,0x6e6a61,2.8));const key=new THREE.DirectionalLight(0xffffff,4);key.position.set(4,6,5);key.castShadow=true;scene.add(key);const rim=new THREE.DirectionalLight(0x94aaff,1.5);rim.position.set(-4,3,-4);scene.add(rim);
-    const avatar=new THREE.Group();avatar.rotation.y=THREE.MathUtils.degToRad(angleRef.current);avatarRef.current=avatar;scene.add(avatar);
-    const whiteMaterial=new THREE.MeshPhysicalMaterial({color:0xf5f5f2,roughness:.28,metalness:0,clearcoat:.5,clearcoatRoughness:.32});
-    new GLTFLoader().load(`./avatar-${gender}.glb`,(gltf)=>{
-      if(disposed)return;const model=gltf.scene;model.traverse((object)=>{if(object instanceof THREE.Mesh||object instanceof THREE.SkinnedMesh){object.material=whiteMaterial;object.castShadow=true;object.receiveShadow=true}});
-      const idle=gltf.animations.find((clip)=>/idle/i.test(clip.name))??gltf.animations[0];if(idle){const mixer=new THREE.AnimationMixer(model);mixer.clipAction(idle).play();mixer.setTime(0)}
-      const box=new THREE.Box3().setFromObject(model);const size=box.getSize(new THREE.Vector3());const center=box.getCenter(new THREE.Vector3());const scale=5.3/size.y;model.scale.setScalar(scale);model.position.set(-center.x*scale,-center.y*scale,-center.z*scale);avatar.add(model);
-    });
-
-    const textureLoader=new THREE.TextureLoader();const shoulder=gender==='male'?1.06:.93;const hip=gender==='male'?.9:1.02;
-    [...garments].sort((a,b)=>a.z-b.z).forEach((item,index)=>{
-      const texture=textureLoader.load(item.src);texture.colorSpace=THREE.SRGBColorSpace;texture.wrapS=THREE.ClampToEdgeWrapping;texture.wrapT=THREE.ClampToEdgeWrapping;
-      const material=new THREE.MeshPhysicalMaterial({map:texture,transparent:true,side:THREE.DoubleSide,alphaTest:.045,roughness:.88,metalness:0,clearcoat:.02});
-      const group=new THREE.Group();group.rotation.z=THREE.MathUtils.degToRad(item.rotation);group.renderOrder=20+index;
-      const part=(geometry:THREE.BufferGeometry,position:[number,number,number],rotation:[number,number,number]=[0,0,0],scale:[number,number,number]=[1,1,1])=>{const mesh=new THREE.Mesh(geometry,material);mesh.position.set(...position);mesh.rotation.set(...rotation);mesh.scale.set(...scale);mesh.castShadow=true;mesh.renderOrder=20+index;group.add(mesh)};
-      if(item.category==='上衣'){
-        part(new THREE.CylinderGeometry(.7*shoulder,.54,1.5,48,6,false),[0,.82,0]);
-        part(new THREE.CylinderGeometry(.23,.18,1.28,28,4,false),[-.77*shoulder,.62,0],[0,0,-.12]);part(new THREE.CylinderGeometry(.23,.18,1.28,28,4,false),[.77*shoulder,.62,0],[0,0,.12]);
-        group.scale.setScalar(Math.max(.6,item.scale/.78));
-      }else if(item.category==='下身'){
-        part(new THREE.CylinderGeometry(.68*hip,.58*hip,.6,44,4,false),[0,-.32,0]);part(new THREE.CylinderGeometry(.34*hip,.23,1.85,32,5,false),[-.32*hip,-1.4,0],[0,0,-.018]);part(new THREE.CylinderGeometry(.34*hip,.23,1.85,32,5,false),[.32*hip,-1.4,0],[0,0,.018]);group.scale.setScalar(Math.max(.6,item.scale/.9));
-      }else if(item.category==='鞋子'){
-        part(new THREE.CapsuleGeometry(.25,.48,10,22),[-.31*hip,-2.5,.2],[Math.PI/2,0,0],[1,1,1.35]);part(new THREE.CapsuleGeometry(.25,.48,10,22),[.31*hip,-2.5,.2],[Math.PI/2,0,0],[1,1,1.35]);group.scale.setScalar(Math.max(.6,item.scale/.62));
-      }else{part(new THREE.TorusGeometry(.38,.06,18,48),[0,1.72,.04],[Math.PI/2,0,0]);part(new THREE.PlaneGeometry(.9,.65,12,12),[0,2,.44]);group.scale.setScalar(Math.max(.6,item.scale/.55))}
-      avatar.add(group);
-    });
-    const floor=new THREE.Mesh(new THREE.CircleGeometry(1.65,64),new THREE.MeshStandardMaterial({color:0xd6d3ca,roughness:1,transparent:true,opacity:.72}));floor.rotation.x=-Math.PI/2;floor.position.y=-2.67;floor.receiveShadow=true;scene.add(floor);
-    const resize=()=>{const{clientWidth:w,clientHeight:h}=host;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()};resize();const observer=new ResizeObserver(resize);observer.observe(host);let frame=0;const render=()=>{frame=requestAnimationFrame(render);renderer.render(scene,camera)};render();
-    return()=>{disposed=true;cancelAnimationFrame(frame);observer.disconnect();if(renderer.domElement.parentNode===host)host.removeChild(renderer.domElement);scene.traverse((object)=>{if(object instanceof THREE.Mesh){object.geometry.dispose();const materials=Array.isArray(object.material)?object.material:[object.material];materials.forEach((material)=>{if('map'in material&&material.map instanceof THREE.Texture)material.map.dispose();material.dispose()})}});renderer.dispose();avatarRef.current=null;cameraRef.current=null};
-  },[gender,garments]);
-  return <div ref={hostRef} className="avatar-3d" aria-label={`${gender==='female'?'女裝':'男裝'}專業 3D 試穿人台`}/>;
+import {
+  covers,
+  geometry,
+  garmentGeometry,
+  type AvatarData,
+} from '@/lib/garment-geometry';
+import { CATEGORIES, type Garment, type Mode } from '@/lib/wardrobe';
+export interface ViewHandle {
+  zone: (y: number) => 'top' | 'bottom' | 'shoes' | null;
+  capture: () => void;
+  stats: () => unknown;
 }
+type Props = {
+  mode: Mode;
+  angle: number;
+  zoom: number;
+  garments: Garment[];
+  onReady: () => void;
+};
+type Runtime = {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.OrthographicCamera;
+  root: THREE.Group;
+  data: AvatarData;
+  body: THREE.Mesh;
+  parts: Map<string, THREE.Mesh>;
+  render: () => void;
+  transitions: { mesh: THREE.Mesh; start: number }[];
+};
+export const Avatar3D = forwardRef<ViewHandle, Props>(function Avatar3D(
+  { mode, angle, zoom, garments, onReady },
+  ref,
+) {
+  const host = useRef<HTMLDivElement>(null),
+    runtime = useRef<Runtime | null>(null),
+    desired = useRef({ mode, angle, zoom });
+  const [loaded, setLoaded] = useState(0),
+    [error, setError] = useState('');
+  useEffect(() => {
+    desired.current = { mode, angle, zoom };
+  }, [mode, angle, zoom]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      zone(y) {
+        const r = runtime.current;
+        if (!r) return null;
+        const screen = (height: number) =>
+          (1 - new THREE.Vector3(0, height, 0).project(r.camera).y) / 2;
+        return y < screen(1.54) || y > screen(-0.05)
+          ? null
+          : y < screen(1.02)
+            ? 'top'
+            : y < screen(0.16)
+              ? 'bottom'
+              : 'shoes';
+      },
+      capture() {
+        const r = runtime.current;
+        if (!r) return;
+        r.render();
+        const link = document.createElement('a');
+        link.download = 'wardrobe-look.png';
+        link.href = r.renderer.domElement.toDataURL('image/png');
+        link.click();
+      },
+      stats() {
+        const r = runtime.current;
+        return r
+          ? {
+              triangles: r.renderer.info.render.triangles,
+              drawCalls: r.renderer.info.render.calls,
+              geometries: r.renderer.info.memory.geometries,
+              rotation: r.root.rotation.y,
+              parts: [...r.parts.keys()],
+            }
+          : null;
+      },
+    }),
+    [],
+  );
+  useEffect(() => {
+    const container = host.current;
+    if (!container) return;
+    let disposed = false,
+      frame = 0;
+    const abort = new AbortController();
+    let cleanup = () => {};
+    async function init() {
+      if (!container) return;
+      try {
+        const response = await fetch('./models/mannequin.json', {
+          signal: abort.signal,
+        });
+        if (!response.ok) throw Error('人台下載失敗');
+        const data = (await response.json()) as AvatarData;
+        if (disposed) return;
+        const renderer = new THREE.WebGLRenderer({
+          antialias: window.devicePixelRatio < 2,
+          alpha: false,
+          preserveDrawingBuffer: true,
+        });
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+        renderer.setClearColor('#e5e6e2');
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.15;
+        container.appendChild(renderer.domElement);
+        const scene = new THREE.Scene(),
+          camera = new THREE.OrthographicCamera(-1, 1, 2, 0, 0.1, 20);
+        camera.position.set(0, 0.92, 5);
+        camera.lookAt(0, 0.92, 0);
+        scene.add(new THREE.HemisphereLight(0xffffff, 0xa3a69d, 2));
+        for (const [x, y, z, intensity] of [
+          [3, 4, 4, 2.8],
+          [-3, 2, 1, 1.2],
+          [-1, 3, -3, 2],
+        ]) {
+          const light = new THREE.DirectionalLight(0xffffff, intensity);
+          light.position.set(x, y, z);
+          scene.add(light);
+        }
+        const root = new THREE.Group();
+        scene.add(root);
+        const body = new THREE.Mesh(
+          geometry(data, data.body, () => true),
+          new THREE.MeshStandardMaterial({ color: '#e3e3df', roughness: 0.32 }),
+        );
+        root.add(body);
+        const base = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.39, 0.4, 0.022, 64),
+          new THREE.MeshStandardMaterial({ color: '#c5c7c1', roughness: 0.48 }),
+        );
+        base.position.y = -0.02;
+        scene.add(base);
+        const r: Runtime = {
+          renderer,
+          scene,
+          camera,
+          root,
+          data,
+          body,
+          parts: new Map(),
+          render: () => renderer.render(scene, camera),
+          transitions: [],
+        };
+        runtime.current = r;
+        const resize = () => {
+          const w = container.clientWidth,
+            h = container.clientHeight;
+          if (!w || !h) return;
+          renderer.setSize(w, h, false);
+          const halfHeight = Math.max(1.025, (0.59 * h) / w);
+          camera.left = (-halfHeight * w) / h;
+          camera.right = (halfHeight * w) / h;
+          camera.top = halfHeight;
+          camera.bottom = -halfHeight;
+          camera.updateProjectionMatrix();
+        };
+        resize();
+        const observer = new ResizeObserver(resize);
+        observer.observe(container);
+        let last = performance.now(),
+          slowFrames = 0,
+          observedFrames = 0;
+        const loop = (now: number) => {
+          if (disposed) return;
+          const dt = Math.min((now - last) / 1000, 0.05);
+          if (document.visibilityState === 'visible') {
+            observedFrames++;
+            if (now - last > 36) slowFrames++;
+            if (observedFrames === 120) {
+              if (slowFrames > 45 && renderer.getPixelRatio() > 1) {
+                renderer.setPixelRatio(1);
+                resize();
+              }
+              observedFrames = 0;
+              slowFrames = 0;
+            }
+          }
+          last = now;
+          const target =
+            desired.current.mode === 'builder' ? 0 : desired.current.angle;
+          root.rotation.y =
+            desired.current.mode === 'builder'
+              ? 0
+              : THREE.MathUtils.damp(root.rotation.y, target, 14, dt);
+          camera.zoom =
+            desired.current.mode === 'builder' ? 1 : desired.current.zoom;
+          camera.updateProjectionMatrix();
+          r.transitions = r.transitions.filter((t) => {
+            const a = Math.min(1, (now - t.start) / 180);
+            t.mesh.position.x = (1 - a) * 0.018;
+            const m = t.mesh.material as THREE.MeshStandardMaterial;
+            m.opacity = 0.45 + 0.55 * a;
+            if (a === 1) {
+              m.transparent = false;
+              m.needsUpdate = true;
+            }
+            return a < 1;
+          });
+          if (document.visibilityState === 'visible') r.render();
+          frame = requestAnimationFrame(loop);
+        };
+        frame = requestAnimationFrame(loop);
+        cleanup = () => {
+          cancelAnimationFrame(frame);
+          observer.disconnect();
+          r.parts.clear();
+          scene.traverse((o) => {
+            if (o instanceof THREE.Mesh) {
+              o.geometry.dispose();
+              const mats = Array.isArray(o.material)
+                ? o.material
+                : [o.material];
+              mats.forEach((m) => {
+                if ('map' in m && m.map instanceof THREE.Texture)
+                  m.map.dispose();
+                m.dispose();
+              });
+            }
+          });
+          renderer.dispose();
+          renderer.domElement.remove();
+          runtime.current = null;
+        };
+        setLoaded((v) => v + 1);
+        onReady();
+      } catch (e) {
+        if (!disposed)
+          setError(e instanceof Error ? e.message : '裝置無法啟動 3D');
+      }
+    }
+    void init();
+    return () => {
+      disposed = true;
+      abort.abort();
+      cleanup();
+    };
+    // Scene lifetime deliberately does not depend on garment selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    const r = runtime.current;
+    if (!r) return;
+    for (const c of CATEGORIES) {
+      const garment = garments.find((g) => g.category === c);
+      if (!garment) continue;
+      const old = r.parts.get(c);
+      if (old?.userData.id === garment.id) continue;
+      if (old) {
+        r.root.remove(old);
+        old.geometry.dispose();
+        const m = old.material as THREE.MeshStandardMaterial;
+        m.map?.dispose();
+        m.dispose();
+        r.transitions = r.transitions.filter((t) => t.mesh !== old);
+      }
+      const material = new THREE.MeshStandardMaterial({
+        color: garment.dominantColors[0] || '#777777',
+        roughness: garment.garmentTemplate === 'jeans' ? 0.95 : 0.82,
+        side: THREE.DoubleSide,
+        depthTest: true,
+        depthWrite: true,
+      });
+      const mesh = new THREE.Mesh(
+        garmentGeometry(r.data, garment.garmentTemplate),
+        material,
+      );
+      mesh.userData.id = garment.id;
+      r.root.add(mesh);
+      r.parts.set(c, mesh);
+      if (garment.texture) {
+        new THREE.TextureLoader().load(garment.texture, (texture) => {
+          if (r.parts.get(c) !== mesh) {
+            texture.dispose();
+            return;
+          }
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+          texture.anisotropy = Math.min(
+            4,
+            r.renderer.capabilities.getMaxAnisotropy(),
+          );
+          material.map = texture;
+          material.color.set('white');
+          material.needsUpdate = true;
+        });
+      }
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        material.transparent = true;
+        r.transitions.push({ mesh, start: performance.now() });
+      }
+    }
+    // Hide covered skin triangles, preventing penetration even with the loose templates.
+    r.body.geometry.dispose();
+    r.body.geometry = geometry(
+      r.data,
+      r.data.body,
+      (p) => !garments.some((g) => covers(g.garmentTemplate, p)),
+    );
+    r.render();
+  }, [garments, loaded]);
+  return (
+    <div className="render-host" ref={host}>
+      {!loaded && !error && <div className="scene-status">正在準備試衣間…</div>}
+      {error && (
+        <div className="scene-status">{error}。請更新瀏覽器或重新載入。</div>
+      )}
+    </div>
+  );
+});
