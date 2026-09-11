@@ -17,6 +17,21 @@ export const templates = {
   casual: '休閒鞋',
 };
 export type Template = keyof typeof templates;
+export interface GarmentShape {
+  hem: number;
+  sleeve: number;
+  ease: number;
+  legWidth: number;
+  flare: number;
+  neck: 'crew' | 'v' | 'collar';
+}
+export interface GarmentAppearance {
+  version: 2;
+  frontTexture: string;
+  frontRegion: { x: number; y: number; width: number; height: number };
+  confidence: number;
+  method: string;
+}
 export const templateCategory = (t: Template): Category =>
   ['shorts', 'pants', 'jeans', 'skirt'].includes(t)
     ? 'bottom'
@@ -36,7 +51,9 @@ export interface Garment {
   texture: string | null;
   garmentTemplate: Template;
   createdAt: string;
-  appearanceMethod: 'sample' | 'color' | 'fabric';
+  appearanceMethod: 'sample' | 'color' | 'fabric' | 'front-projection';
+  appearance?: GarmentAppearance;
+  shape?: GarmentShape;
 }
 export type Outfit = Record<Category, string>;
 const seed = (

@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 :root {
+  --muted-foreground: #626a61;
+  --primary: #374934;
+  --ring: #536c47;
   --ink: #222724;
   --muted: #747b75;
   --paper: #f8f9f5;
@@ -8,6 +11,390 @@
   font-family: Arial, 'Microsoft JhengHei', sans-serif;
   color: var(--ink);
   background: var(--paper);
+}
+.studio header {
+  gap: 12px;
+}
+.studio .wordmark {
+  margin-right: auto;
+}
+.add-wardrobe-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 19px;
+  border-radius: 28px;
+  background: #29382c;
+  color: white;
+  font-size: 14px;
+  min-height: 46px;
+}
+.add-garment-dialog[data-slot='dialog-content'] {
+  display: block;
+  width: min(1160px, 96vw);
+  max-width: 96vw;
+  max-height: 94dvh;
+  overflow: auto;
+  background: var(--paper);
+  padding: 28px;
+  color: var(--ink);
+  border-radius: 22px;
+}
+.step-kicker {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+  letter-spacing: 0.08em;
+}
+.add-garment-dialog h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.add-garment-dialog p {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 10px 0;
+}
+.input-options {
+  max-width: 720px;
+  margin: auto;
+}
+.dropzone {
+  width: 100%;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  flex-direction: column;
+  border: 1.5px dashed #9aa894;
+  border-radius: 18px;
+  background: #edf1e8;
+  padding: 28px;
+}
+.dropzone strong {
+  font-size: 18px;
+  font-weight: 500;
+}
+.dropzone span {
+  font-size: 13px;
+  color: var(--muted);
+}
+.dropzone.drag-over {
+  outline: 3px solid #526e3a;
+  background: #e0edcd;
+}
+.url-import {
+  margin-top: 26px;
+}
+.url-import > label {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.url-import > div {
+  display: flex;
+  gap: 10px;
+}
+.url-import input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+}
+.import-examples {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 22px;
+}
+.import-examples button {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 10px 13px;
+  margin: 0 8px 8px 0;
+  font-size: 13px;
+}
+.import-error {
+  padding: 14px 16px;
+  background: #fff0e8;
+  color: #883c21;
+  border: 1px solid #efccb8;
+  border-radius: 10px;
+  line-height: 1.7;
+  margin-bottom: 18px;
+  font-size: 14px;
+}
+.confirm-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(260px, 1.25fr) minmax(
+      220px,
+      0.9fr
+    );
+  gap: 25px;
+}
+.mask-editor {
+  position: relative;
+  max-height: 300px;
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.mask-editor img {
+  display: block;
+  width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+}
+.mask-editor {
+  aspect-ratio: 1;
+}
+.mask-editor img {
+  height: 100%;
+  max-height: none;
+  object-fit: fill;
+}
+.mask-editor svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.mask-editor.editing svg {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.mask-editor polygon {
+  fill: #9fcc5540;
+  stroke: #244d20;
+  stroke-width: 0.4;
+}
+.mask-editor circle {
+  fill: #fff;
+  stroke: #244d20;
+  stroke-width: 0.3;
+}
+.mask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 10px 0 14px;
+}
+.mask-actions button {
+  font-size: 12px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.cutout-preview {
+  height: 160px;
+  border-radius: 10px;
+  background-color: #e7e9e3;
+  background-image:
+    linear-gradient(45deg, #ffffff80 25%, transparent 25%),
+    linear-gradient(-45deg, #ffffff80 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #ffffff80 75%),
+    linear-gradient(-45deg, transparent 75%, #ffffff80 75%);
+  background-size: 20px 20px;
+  background-position:
+    0 0,
+    0 10px,
+    10px -10px,
+    -10px 0;
+}
+.cutout-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.needs-review {
+  color: #a2512c !important;
+}
+.import-3d {
+  position: relative;
+  height: 480px;
+  border-radius: 90px 90px 10px 10px;
+  overflow: hidden;
+  background: #e5e6e2;
+}
+.import-3d .render-host {
+  inset: 0 !important;
+}
+.preview-angles {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  padding: 12px 0;
+}
+.preview-angles button {
+  background: #e9ede3;
+  border-radius: 20px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.garment-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.garment-fields > label,
+.garment-fields details label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+}
+.garment-fields input,
+.garment-fields select {
+  border: 1px solid var(--line);
+  padding: 10px;
+  border-radius: 9px;
+  background: white;
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+}
+.garment-fields p {
+  margin: 0;
+}
+.detected-colors {
+  display: flex;
+  gap: 6px;
+}
+.detected-colors span {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid #0002;
+}
+.garment-fields details {
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+}
+.garment-fields summary {
+  font-size: 14px;
+  cursor: pointer;
+}
+.garment-fields details label {
+  margin-top: 16px;
+}
+.garment-fields [data-slot='slider-track'] {
+  background: #cdd6c5;
+  min-height: 5px;
+}
+.garment-fields [data-slot='slider-range'] {
+  background: #536c47;
+}
+.garment-fields [data-slot='slider'] {
+  padding: 12px 5px;
+}
+.confirmation-note {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+@media (max-width: 900px) {
+  .studio header {
+    padding: 0 14px;
+    gap: 8px;
+  }
+  .wardrobe-open {
+    padding: 10px;
+    font-size: 12px;
+    gap: 4px;
+  }
+  .wardrobe-open svg {
+    display: none;
+  }
+  .add-wardrobe-entry {
+    font-size: 13px;
+    padding: 10px 12px;
+    gap: 4px;
+  }
+  .studio .wordmark {
+    font-size: 15px;
+  }
+  .confirm-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .garment-fields {
+    grid-column: 1/-1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .garment-fields details,
+  .confirmation-note {
+    grid-column: 1/-1;
+  }
+  .import-3d {
+    height: 350px;
+    border-radius: 50px 50px 8px 8px;
+  }
+  .add-garment-dialog[data-slot='dialog-content'] {
+    padding: 20px;
+  }
+  .cutout-preview {
+    height: 115px;
+  }
+  .mask-editor,
+  .mask-editor img {
+    max-height: 220px;
+  }
+  .preview-angles {
+    gap: 3px;
+    flex-wrap: wrap;
+  }
+  .preview-angles button {
+    padding: 8px;
+    font-size: 12px;
+  }
+  .url-import > div {
+    flex-wrap: wrap;
+  }
+  .url-import input {
+    flex-basis: 100%;
+  }
+  .dropzone strong {
+    font-size: 16px;
+  }
+  .dropzone {
+    min-height: 175px;
+    padding: 20px;
+  }
+}
+@media (max-width: 420px) {
+  .add-garment-dialog[data-slot='dialog-content'] {
+    padding: 16px;
+  }
+  .confirm-grid {
+    gap: 12px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  }
+  .garment-fields {
+    display: flex;
+  }
+  .import-3d {
+    height: 310px;
+  }
+  .image-review h3,
+  .preview-review h3 {
+    font-size: 13px;
+  }
+  .mask-actions button {
+    font-size: 11px;
+    padding: 6px;
+  }
 }
 * {
   box-sizing: border-box;

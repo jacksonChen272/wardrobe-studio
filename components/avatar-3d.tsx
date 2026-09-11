@@ -7,12 +7,8 @@ import {
   forwardRef,
 } from 'react';
 import * as THREE from 'three';
-import {
-  covers,
-  geometry,
-  garmentGeometry,
-  type AvatarData,
-} from '@/lib/garment-geometry';
+import { createGarment, disposeGarment } from '@/lib/garment-render';
+import { covers, geometry, type AvatarData } from '@/lib/garment-geometry';
 import { CATEGORIES, type Garment, type Mode } from '@/lib/wardrobe';
 export interface ViewHandle {
   zone: (y: number) => 'top' | 'bottom' | 'shoes' | null;
@@ -217,19 +213,7 @@ export const Avatar3D = forwardRef<ViewHandle, Props>(function Avatar3D(
           cancelAnimationFrame(frame);
           observer.disconnect();
           r.parts.clear();
-          scene.traverse((o) => {
-            if (o instanceof THREE.Mesh) {
-              o.geometry.dispose();
-              const mats = Array.isArray(o.material)
-                ? o.material
-                : [o.material];
-              mats.forEach((m) => {
-                if ('map' in m && m.map instanceof THREE.Texture)
-                  m.map.dispose();
-                m.dispose();
-              });
-            }
-          });
+          disposeGarment(scene);
           renderer.dispose();
           renderer.domElement.remove();
           runtime.current = null;
@@ -257,46 +241,21 @@ export const Avatar3D = forwardRef<ViewHandle, Props>(function Avatar3D(
       const garment = garments.find((g) => g.category === c);
       if (!garment) continue;
       const old = r.parts.get(c);
-      if (old?.userData.id === garment.id) continue;
+      if (old?.userData.garment === garment) continue;
       if (old) {
         r.root.remove(old);
-        old.geometry.dispose();
-        const m = old.material as THREE.MeshStandardMaterial;
-        m.map?.dispose();
-        m.dispose();
+        disposeGarment(old);
         r.transitions = r.transitions.filter((t) => t.mesh !== old);
       }
-      const material = new THREE.MeshStandardMaterial({
-        color: garment.dominantColors[0] || '#777777',
-        roughness: garment.garmentTemplate === 'jeans' ? 0.95 : 0.82,
-        side: THREE.DoubleSide,
-        depthTest: true,
-        depthWrite: true,
-      });
-      const mesh = new THREE.Mesh(
-        garmentGeometry(r.data, garment.garmentTemplate),
-        material,
+      const mesh = createGarment(
+        r.data,
+        garment,
+        () => r.parts.get(c) === mesh,
       );
-      mesh.userData.id = garment.id;
+      mesh.userData.garment = garment;
+      const material = mesh.material as THREE.MeshStandardMaterial;
       r.root.add(mesh);
       r.parts.set(c, mesh);
-      if (garment.texture) {
-        new THREE.TextureLoader().load(garment.texture, (texture) => {
-          if (r.parts.get(c) !== mesh) {
-            texture.dispose();
-            return;
-          }
-          texture.colorSpace = THREE.SRGBColorSpace;
-          texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-          texture.anisotropy = Math.min(
-            4,
-            r.renderer.capabilities.getMaxAnisotropy(),
-          );
-          material.map = texture;
-          material.color.set('white');
-          material.needsUpdate = true;
-        });
-      }
       if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         material.transparent = true;
         r.transitions.push({ mesh, start: performance.now() });
@@ -307,7 +266,7 @@ export const Avatar3D = forwardRef<ViewHandle, Props>(function Avatar3D(
     r.body.geometry = geometry(
       r.data,
       r.data.body,
-      (p) => !garments.some((g) => covers(g.garmentTemplate, p)),
+      (p) => !garments.some((g) => covers(g.garmentTemplate, p, g.shape)),
     );
     r.render();
   }, [garments, loaded]);

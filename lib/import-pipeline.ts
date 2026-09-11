@@ -35,7 +35,7 @@ export const fallbackSegmenter: GarmentSegmenter = {
     const add = (p: number) => {
       if (visited[p]) return;
       visited[p] = 1;
-      if (Math.hypot(...bg.map((v, k) => v - data[p * 4 + k])) < 35)
+      if (Math.hypot(...bg.map((v, k) => v - data[p * 4 + k])) < 12)
         queue[end++] = p;
     };
     for (let x = 0; x < w; x++) {

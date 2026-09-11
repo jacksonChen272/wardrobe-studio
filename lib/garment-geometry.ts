@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { Template } from './wardrobe';
+import type { Template, GarmentShape } from './wardrobe';
+import { defaultShape } from './garment-analysis';
 export interface AvatarData {
   positions: number[][];
   body: number[];
@@ -12,18 +13,54 @@ export function pose(p: number[]) {
   const [x, y, z] = p;
   return [x * (0.82 + 0.18 * THREE.MathUtils.smoothstep(y, 0.78, 1.08)), y, z];
 }
-export function covers(t: Template, p: number[]) {
+export function neckline(p: number[], shape: GarmentShape) {
+  const front = THREE.MathUtils.smoothstep(p[2], -0.025, 0.045);
+  const factor = Math.max(
+    0,
+    1 - Math.pow(Math.abs(p[0]) / 0.09, shape.neck === 'v' ? 1 : 2),
+  );
+  return (
+    1.51 -
+    factor *
+      front *
+      (shape.neck === 'collar' ? 0.072 : shape.neck === 'v' ? 0.09 : 0.039)
+  );
+}
+export function garmentBounds(t: Template, s = defaultShape(t)): number[] {
+  return [
+    'tshirt',
+    'longsleeve',
+    'shirt',
+    'sweater',
+    'hoodie',
+    'jacket',
+  ].includes(t)
+    ? [s.hem, 1.51, s.sleeve]
+    : t === 'shorts'
+      ? [0.59, 1.04, 0.3]
+      : t === 'skirt'
+        ? [0.5, 1.04, 0.31]
+        : ['pants', 'jeans'].includes(t)
+          ? [0.105, 1.04, 0.33]
+          : [-1, t === 'sneakers' ? 0.14 : 0.09, 1];
+}
+export function covers(t: Template, p: number[], shape = defaultShape(t)) {
   const [x, y] = p;
   const ax = Math.abs(x);
   switch (t) {
     case 'tshirt':
-      return y > 0.99 && y < 1.51 && ax < 0.32;
     case 'longsleeve':
     case 'shirt':
     case 'sweater':
     case 'hoodie':
     case 'jacket':
-      return y > 0.97 && y < 1.51 && ax < 0.455;
+      return (
+        y > shape.hem &&
+        y < neckline(p, shape) &&
+        ax < shape.sleeve &&
+        ((ax - 0.18) * 0.8 + (1.44 - y) * 0.6 < (shape.sleeve - 0.18) * 1.25 ||
+          ax < 0.18)
+      );
     case 'shorts':
       return y > 0.59 && y < 1.04 && ax < 0.3;
     case 'skirt':
@@ -69,7 +106,11 @@ export function geometry(
   g.computeBoundingSphere();
   return g;
 }
-export function garmentGeometry(data: AvatarData, t: Template) {
+export function garmentGeometry(
+  data: AvatarData,
+  t: Template,
+  shape = defaultShape(t),
+) {
   const isSkirt = t === 'skirt';
   const indices = isSkirt ? data.skirt : data.shell;
   const offset = ['hoodie', 'jacket', 'sweater'].includes(t)
@@ -81,21 +122,15 @@ export function garmentGeometry(data: AvatarData, t: Template) {
         : 0.009;
   const full = geometry(data, indices, () => true, offset);
   // Clip crossing triangles at exact hem/cuff planes instead of discarding whole faces.
-  const bounds: Record<Template, number[]> = {
-    tshirt: [0.99, 1.51, 0.32],
-    longsleeve: [0.97, 1.51, 0.455],
-    shirt: [0.97, 1.51, 0.455],
-    sweater: [0.97, 1.51, 0.455],
-    hoodie: [0.97, 1.51, 0.455],
-    jacket: [0.97, 1.51, 0.455],
-    shorts: [0.59, 1.04, 0.3],
-    skirt: [0.5, 1.04, 0.31],
-    pants: [0.105, 1.04, 0.33],
-    jeans: [0.105, 1.04, 0.33],
-    sneakers: [-1, 0.14, 1],
-    casual: [-1, 0.09, 1],
-  };
-  const [low, high, width] = bounds[t];
+  const [low, high, width] = garmentBounds(t, shape);
+  const isTop = [
+    'tshirt',
+    'longsleeve',
+    'shirt',
+    'sweater',
+    'hoodie',
+    'jacket',
+  ].includes(t);
   type V = { source: number[]; position: number[]; normal: number[] };
   const fp = full.getAttribute('position'),
     fn = full.getAttribute('normal'),
@@ -103,25 +138,33 @@ export function garmentGeometry(data: AvatarData, t: Template) {
     outN: number[] = [],
     outI: number[] = [];
   for (let i = 0; i < indices.length; i += 3) {
-    let poly: V[] = indices
-      .slice(i, i + 3)
-      .map((id) => ({
-        source: data.positions[id],
-        position: [fp.getX(id), fp.getY(id), fp.getZ(id)],
-        normal: [fn.getX(id), fn.getY(id), fn.getZ(id)],
-      }));
-    for (const [axis, limit, sign] of [
-      [1, low, 1],
-      [1, high, -1],
-      [0, -width, 1],
-      [0, width, -1],
-    ]) {
+    let poly: V[] = indices.slice(i, i + 3).map((id) => ({
+      source: data.positions[id],
+      position: [fp.getX(id), fp.getY(id), fp.getZ(id)],
+      normal: [fn.getX(id), fn.getY(id), fn.getZ(id)],
+    }));
+    const clips: ((p: number[]) => number)[] = [
+      (p) => p[1] - low,
+      (p) => high - p[1],
+      (p) => p[0] + width,
+      (p) => width - p[0],
+    ];
+    if (isTop)
+      clips.push(
+        (p) => neckline(p, shape) - p[1],
+        (p) =>
+          Math.abs(p[0]) < 0.18
+            ? 1
+            : (shape.sleeve - 0.18) * 1.25 -
+              ((Math.abs(p[0]) - 0.18) * 0.8 + (1.44 - p[1]) * 0.6),
+      );
+    for (const distance of clips) {
       const next: V[] = [];
       for (let j = 0; j < poly.length; j++) {
         const a = poly[j],
           b = poly[(j + 1) % poly.length],
-          da = (a.source[axis] - limit) * sign,
-          db = (b.source[axis] - limit) * sign;
+          da = distance(a.source),
+          db = distance(b.source);
         if (da >= 0) next.push(a);
         if (da >= 0 !== db >= 0) {
           const f = da / (da - db);
@@ -139,6 +182,8 @@ export function garmentGeometry(data: AvatarData, t: Template) {
     for (let j = 1; j < poly.length - 1; j++) {
       const base = outP.length / 3;
       for (const v of [poly[0], poly[j], poly[j + 1]]) {
+        if (Math.abs(v.source[1] - low) < 0.00001) v.position[1] = low;
+        if (Math.abs(v.source[1] - high) < 0.00001) v.position[1] = high;
         outP.push(...v.position);
         outN.push(...v.normal);
       }
@@ -152,6 +197,36 @@ export function garmentGeometry(data: AvatarData, t: Template) {
   raw.setIndex(outI);
   const g = mergeVertices(raw, 0.00001);
   raw.dispose();
+  const gp = g.getAttribute('position'),
+    gn = g.getAttribute('normal');
+  for (let i = 0; i < gp.count; i++) {
+    let x = gp.getX(i),
+      y = gp.getY(i),
+      z = gp.getZ(i);
+    const ax = Math.abs(x);
+    if (isTop) {
+      const torso = 1 - THREE.MathUtils.smoothstep(ax, 0.18, 0.24);
+      x += Math.sign(x) * shape.ease * torso;
+      z += gn.getZ(i) * shape.ease;
+      const hemFold = Math.exp(-Math.pow((y - low - 0.025) / 0.035, 2));
+      z += gn.getZ(i) * Math.sin(x * 85) * 0.003 * hemFold;
+    } else if (['pants', 'jeans', 'shorts'].includes(t) && y < 0.87) {
+      const center = Math.sign(x) * (0.1 + (0.9 - y) * 0.12);
+      x = center + (x - center) * shape.legWidth;
+      z += gn.getZ(i) * 0.01;
+    } else if (t === 'skirt') {
+      const flare = 1 + (shape.flare - 1) * Math.max(0, (1.04 - y) / 0.54);
+      x *= flare;
+      z *= flare;
+      z += Math.sin(x * 70) * 0.004;
+    } else if (['sneakers', 'casual'].includes(t)) {
+      x = Math.sign(x) * 0.194 + (x - Math.sign(x) * 0.194) * 1.14;
+      z = z * 1.05 + 0.008;
+      y = Math.max(0.017, y);
+    }
+    gp.setXYZ(i, x, y, z);
+  }
+  g.computeVertexNormals();
   // Cuffs/necklines use boundary walls: actual thickness, not transparent cutouts.
   const p = g.getAttribute('position'),
     n = g.getAttribute('normal');

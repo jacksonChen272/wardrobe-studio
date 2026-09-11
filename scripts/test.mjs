@@ -1,9 +1,17 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
+import { createHash } from 'node:crypto';
 import 'fake-indexeddb/auto';
 fs.mkdirSync('work/tests', { recursive: true });
-for (const name of ['wardrobe', 'import-pipeline', 'garment-geometry']) {
+for (const name of [
+  'wardrobe',
+  'import-pipeline',
+  'garment-geometry',
+  'garment-analysis',
+  'garment-render',
+  'appearance-pipeline',
+]) {
   const source = fs.readFileSync(`lib/${name}.ts`, 'utf8');
   const js = ts
     .transpileModule(source, {
@@ -12,7 +20,7 @@ for (const name of ['wardrobe', 'import-pipeline', 'garment-geometry']) {
         target: ts.ScriptTarget.ES2022,
       },
     })
-    .outputText.replaceAll("'./wardrobe'", "'./wardrobe.js'");
+    .outputText.replace(/(from\s+['"])(\.\/[^'"]+)(['"])/g, '$1$2.js$3');
   fs.writeFileSync(`work/tests/${name}.js`, js);
 }
 const {
@@ -180,4 +188,152 @@ const retained = await new Promise((resolve) => {
   };
 });
 check('legacy accessories untouched', () => assert.equal(retained.length, 2));
+const { defaultShape, detectTemplate, silhouette } =
+  await import('../work/tests/garment-analysis.js');
+const { frontCoordinates, createGarment, disposeGarment } =
+  await import('../work/tests/garment-render.js');
+const { importImageUrl } = await import('../work/tests/appearance-pipeline.js');
+check('existing six gesture functions are unchanged', () => {
+  const file = ts.createSourceFile(
+      'p.tsx',
+      fs.readFileSync('app/page.tsx', 'utf8'),
+      99,
+      true,
+      4,
+    ),
+    parts = [];
+  const visit = (n) => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ['down', 'move', 'up', 'change', 'switchMode', 'resetGesture'].includes(
+        n.name.getText(file),
+      )
+    )
+      parts.push(
+        n.name.getText(file) +
+          ':' +
+          n.initializer.getText(file).replace(/\s+/g, ''),
+      );
+    ts.forEachChild(n, visit);
+  };
+  visit(file);
+  assert.equal(
+    createHash('sha256').update(parts.sort().join('|')).digest('hex'),
+    'ca606c752336c567c8963df9e0f1d82ce5dcf68d918b2a552d56656ec758b8e2',
+  );
+});
+check('T-shirt name never matches generic shirt', () =>
+  assert.equal(
+    detectTemplate(silhouette(separated.mask), '紅色白 T-tshirt').template,
+    'tshirt',
+  ),
+);
+check(
+  'shirt, hoodie and T-shirt have distinct silhouettes and construction',
+  () => {
+    const meshes = ['tshirt', 'shirt', 'hoodie'].map((t) =>
+      createGarment(
+        data,
+        { ...samples[0], garmentTemplate: t, shape: defaultShape(t) },
+        () => true,
+      ),
+    );
+    meshes.forEach((m) => m.geometry.computeBoundingBox());
+    assert(
+      meshes[0].geometry.boundingBox.max.x <
+        meshes[1].geometry.boundingBox.max.x,
+    );
+    assert(
+      meshes[2].geometry.boundingBox.min.y <
+        meshes[0].geometry.boundingBox.min.y,
+    );
+    assert(meshes[1].getObjectByName('collar-1'));
+    assert(meshes[2].getObjectByName('hood'));
+    assert(!meshes[0].getObjectByName('hood'));
+    // Full sleeves cover the distal forearm; short sleeves must leave it exposed.
+    assert(covers('shirt', [0.45, 1.16, 0.15]));
+    assert(covers('hoodie', [0.45, 1.16, 0.15]));
+    assert(!covers('tshirt', [0.45, 1.16, 0.15]));
+    meshes.forEach(disposeGarment);
+  },
+);
+check('shoe template includes two real sole meshes', () => {
+  const m = createGarment(
+    data,
+    samples.find((g) => g.garmentTemplate === 'sneakers'),
+    () => true,
+  );
+  assert(m.getObjectByName('sole-1'));
+  assert(m.getObjectByName('sole--1'));
+  disposeGarment(m);
+});
+check('front projection has bounded UV and zero logo weight on rear', () => {
+  const garment = {
+      ...samples[0],
+      appearance: { frontRegion: { x: 0.2, y: 0.05, width: 0.6, height: 0.9 } },
+    },
+    g = garmentGeometry(data, 'tshirt');
+  frontCoordinates(g, garment);
+  const p = g.attributes.position,
+    w = g.attributes.frontWeight,
+    uv = g.attributes.frontUv;
+  let front = 0;
+  for (let i = 0; i < p.count; i++) {
+    assert(Number.isFinite(uv.getX(i)));
+    if (p.getZ(i) < -0.01) assert.equal(w.getX(i), 0);
+    if (w.getX(i) > 0.8) front++;
+  }
+  assert(front > 20);
+  g.dispose();
+});
+const originalFetch = globalThis.fetch;
+let optionsSeen;
+globalThis.fetch = async (_, options) => {
+  optionsSeen = options;
+  return new Response(new Uint8Array([137, 80, 78, 71]), {
+    headers: { 'content-type': 'image/png' },
+  });
+};
+const urlFile = await importImageUrl('https://example.invalid/product.png');
+check('URL import reads image without credentials', () => {
+  assert.equal(urlFile.type, 'image/png');
+  assert.equal(optionsSeen.credentials, 'omit');
+  assert.equal(optionsSeen.referrerPolicy, 'no-referrer');
+});
+await assert.rejects(() => importImageUrl('javascript:alert(1)'), /HTTP/);
+check('unsafe URL scheme rejected', () => {});
+globalThis.fetch = async () => {
+  throw new TypeError('CORS');
+};
+await assert.rejects(
+  () => importImageUrl('https://example.invalid/image.png'),
+  /CORS.*上傳|CORS.*拖入/,
+);
+check('CORS error gives actionable upload fallback', () => {});
+globalThis.fetch = async () =>
+  new Response('<html/>', { headers: { 'content-type': 'text/html' } });
+await assert.rejects(
+  () => importImageUrl('https://example.invalid/product'),
+  /商品頁/,
+);
+check('product HTML is not treated as an image', () => {});
+globalThis.fetch = originalFetch;
+const featured = {
+  ...item,
+  id: 'front-print',
+  appearanceMethod: 'front-projection',
+  shape: defaultShape('tshirt'),
+  appearance: {
+    version: 2,
+    frontTexture: 'original-red-print-pixels',
+    frontRegion: { x: 0.2, y: 0.05, width: 0.6, height: 0.9 },
+    confidence: 0.8,
+    method: 'edge-background',
+  },
+};
+await saveGarment(featured);
+const restored = (await loadGarments()).find((g) => g.id === featured.id);
+check('front texture, source region and shape survive reload', () =>
+  assert.deepEqual(restored, featured),
+);
 console.log(`${passed} checks passed`);

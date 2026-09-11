@@ -35,14 +35,8 @@ import {
   type Category,
   type Garment,
   type Mode,
-  type Template,
 } from '@/lib/wardrobe';
-import {
-  prepareImport,
-  finishImport,
-  fabricSwatch,
-  type ImportDraft,
-} from '@/lib/import-pipeline';
+import { AddGarment } from '@/components/add-garment';
 const View = lazy(() =>
   import('@/components/avatar-3d').then((m) => ({ default: m.Avatar3D })),
 );
@@ -56,15 +50,8 @@ export default function Home() {
     [ready, setReady] = useState(false),
     [drawer, setDrawer] = useState<Category | null>(null),
     [notice, setNotice] = useState(''),
-    [busy, setBusy] = useState(false),
-    [draft, setDraft] = useState<ImportDraft | null>(null),
-    [name, setName] = useState(''),
-    [template, setTemplate] = useState<Template>('tshirt'),
-    [color, setColor] = useState('#555555'),
-    [swatch, setSwatch] = useState<string | null>(null),
-    [sampling, setSampling] = useState(false);
+    [adding, setAdding] = useState(false);
   const view = useRef<ViewHandle>(null),
-    fileInput = useRef<HTMLInputElement>(null),
     surface = useRef<HTMLDivElement>(null),
     gesture = useRef<{
       id: number;
@@ -171,47 +158,12 @@ export default function Home() {
       change(g.category, e.clientX < g.x ? 1 : -1);
     resetGesture();
   };
-  const importFile = async (file?: File) => {
-    if (!file) return;
-    setBusy(true);
-    setNotice('');
-    try {
-      const d = await prepareImport(file);
-      setDraft(d);
-      setColor(d.color);
-      setName(file.name.replace(/\.[^.]+$/, ''));
-      setTemplate(
-        drawer === 'bottom'
-          ? 'pants'
-          : drawer === 'shoes'
-            ? 'sneakers'
-            : 'tshirt',
-      );
-      setSwatch(null);
-      setSampling(false);
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : '圖片無法讀取');
-    } finally {
-      setBusy(false);
-      if (fileInput.current) fileInput.current.value = '';
-    }
-  };
-  const confirmImport = async () => {
-    if (!draft) return;
-    setBusy(true);
-    try {
-      const item = finishImport(draft, name, template, color, swatch);
-      await saveGarment(item);
-      setItems((a) => [...a, item]);
-      setOutfit((o) => ({ ...o, [item.category]: item.id }));
-      setDraft(null);
-      setDrawer(null);
-      setNotice('已加入衣櫥並換上。照片僅儲存在這台裝置。');
-    } catch {
-      setNotice('儲存失敗，可能是裝置空間不足。請重試。');
-    } finally {
-      setBusy(false);
-    }
+  const saveImported = async (item: Garment) => {
+    await saveGarment(item);
+    setItems((a) => [...a, item]);
+    setOutfit((o) => ({ ...o, [item.category]: item.id }));
+    setDrawer(null);
+    setNotice('已加入衣櫥並換上。照片只儲存在這台裝置。');
   };
   return (
     <main className="studio" data-mode={mode}>
@@ -225,6 +177,14 @@ export default function Home() {
           onClick={() => setDrawer('top')}
         >
           我的衣櫥 <Plus size={16} />
+        </button>
+        <button
+          className="add-wardrobe-entry"
+          disabled={mode === 'inspect'}
+          onClick={() => setAdding(true)}
+        >
+          <Plus size={18} />
+          加入衣櫥
         </button>
       </header>
       <section className="experience">
@@ -365,7 +325,7 @@ export default function Home() {
               )}
             </div>
           ))}
-          <p className="approx-note">版型為近似穿搭示意，側面延續布料色彩。</p>
+          <p className="approx-note">正面保留商品圖案，側背面為近似布料。</p>
         </aside>
         <footer>
           {mode === 'builder' ? (
@@ -424,18 +384,11 @@ export default function Home() {
           {notice}
         </output>
       )}
-      <input
-        ref={fileInput}
-        type="file"
-        hidden
-        accept="image/jpeg,image/png,image/webp"
-        onChange={(e) => void importFile(e.target.files?.[0])}
-      />
       {drawer && (
         <Dialog
-          open={!draft}
+          open={!adding}
           onOpenChange={(open) => {
-            if (!open && !busy) setDrawer(null);
+            if (!open) setDrawer(null);
           }}
         >
           <DialogContent
@@ -460,35 +413,9 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <button
-              className="upload-button"
-              disabled={busy}
-              onClick={() => fileInput.current?.click()}
-            >
+            <button className="upload-button" onClick={() => setAdding(true)}>
               <Plus size={18} />
-              {busy ? '正在處理圖片…' : '上傳衣服 / 商品圖片'}
-            </button>
-            <p className="import-help">
-              商品頁請先儲存圖片再上傳。支援白底、平拍及穿著照片；下一步選擇版型與布料。
-            </p>
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={async () => {
-                try {
-                  const r = await fetch('./sample-jacket.png');
-                  if (!r.ok) throw Error();
-                  await importFile(
-                    new File([await r.blob()], '範例藍外套.png', {
-                      type: 'image/png',
-                    }),
-                  );
-                } catch {
-                  setNotice('範例照片無法載入，請改用上傳。');
-                }
-              }}
-            >
-              試用範例商品圖
+              加入衣櫥：上傳 / 拖曳 / 圖片網址
             </button>
             <div className="closet-grid">
               {items
@@ -522,112 +449,13 @@ export default function Home() {
           </DialogContent>
         </Dialog>
       )}
-      {draft && (
-        <Dialog
+      {adding && (
+        <AddGarment
           open
-          onOpenChange={(open) => {
-            if (!open && !busy) setDraft(null);
-          }}
-        >
-          <DialogContent
-            showCloseButton={false}
-            className="import-sheet"
-            aria-label="確認衣物外觀"
-          >
-            <div className="sheet-heading">
-              <DialogTitle>確認衣物外觀</DialogTitle>
-              <button
-                aria-label="取消匯入"
-                disabled={busy}
-                onClick={() => setDraft(null)}
-              >
-                <X />
-              </button>
-            </div>
-            <div className="import-columns">
-              <div>
-                <button
-                  className={`source-preview ${sampling ? 'sampling' : ''}`}
-                  aria-label="點選衣物布料取樣"
-                  onClick={async (e) => {
-                    if (!sampling) return;
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const t = await fabricSwatch(
-                      draft.source,
-                      (e.clientX - rect.left) / rect.width,
-                      (e.clientY - rect.top) / rect.height,
-                    );
-                    setSwatch(t);
-                    setSampling(false);
-                  }}
-                >
-                  <img src={draft.source} alt="原始衣服照片" />
-                </button>
-                <p>
-                  {draft.method === 'manual'
-                    ? '這張照片需要你選擇衣物布料區域。'
-                    : draft.method === 'transparent'
-                      ? '已辨識透明背景。'
-                      : '已分離連接邊緣的單色背景，請確認衣物顏色。'}
-                </p>
-              </div>
-              <div className="import-fields">
-                <label>
-                  單品名稱
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </label>
-                <label>
-                  選擇版型
-                  <select
-                    value={template}
-                    onChange={(e) => setTemplate(e.target.value as Template)}
-                  >
-                    {Object.entries(templates).map(([t, l]) => (
-                      <option key={t} value={t}>
-                        {l}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  布料主色
-                  <input
-                    type="color"
-                    value={color}
-                    onChange={(e) => {
-                      setColor(e.target.value);
-                      setSwatch(null);
-                    }}
-                  />
-                </label>
-                <button className="secondary" onClick={() => setSampling(true)}>
-                  {sampling ? '請點照片中的衣服' : '從照片選布料區域'}
-                </button>
-                {swatch && (
-                  <div className="swatch">
-                    <img src={swatch} alt="取樣布料" />
-                    <button onClick={() => setSwatch(null)}>改用純色</button>
-                  </div>
-                )}
-                <p>
-                  版型決定立體形狀；取樣區域決定布料紋理。請避開皮膚、衣架與背景。此版本不自動還原
-                  Logo。
-                </p>
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => void confirmImport()}
-                >
-                  {busy ? '儲存中…' : '加入衣櫥並試穿'}
-                  <ArrowRight size={17} />
-                </button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+          onClose={() => setAdding(false)}
+          onSave={saveImported}
+          selected={selected}
+        />
       )}
     </main>
   );
